@@ -329,6 +329,3 @@ The corrected version addresses the main problems and provides a better starting
 
 ---
 
-**Author:** Dhakshitha Nerella
-
-**Assessment:** AI/ML Engineer – Technical Assessment
