@@ -1,123 +1,96 @@
-## About the Project
 
-This project is part of an AI/ML Engineer technical assessment. The task was to review an existing machine learning model that predicts whether medical insurance claims might get denied.
+# Claim Denial Risk Model – Code Review
 
-The main goal is to identify high-risk claims before they are submitted so the billing team can check and correct possible issues.
+## About This Assessment
 
-The billing team can review a maximum of 150 claims per day.
+I reviewed the given Python model that predicts whether a medical insurance claim may be denied. The idea is to catch problems before submitting claims, while keeping the billing team's workload within 150 reviews per day.
 
-For this assessment, I ran the given code, understood how the model works, identified the problems, and created a corrected version.
+I ran the original script, checked how it prepares data and evaluates predictions, and made a corrected example to address the biggest issues.
 
-## 1. Original Model Results
+---
 
-After running `claim_denial_model.py`, I got the following results:
+## 1. Original Code and Results
 
-| Metric | Result |
+The original `claim_denial_model.py` generated 10,000 closed claims and 500 pending claims.
+
+Here is what it printed:
+
+| Measure | Original Result |
 |---|---|
-| Closed Claims | 10,000 |
-| Pending Claims | 500 |
-| Denial Rate | 11.5% |
-| ROC AUC | 0.917 |
-| Threshold | 0.90 |
-| Precision | 0.928 |
-| Recall | 0.928 |
-| Claims Held | 41 out of 500 |
+| Closed claims | 10,000 |
+| Pending claims | 500 |
+| Historical denial rate | 11.5% |
+| Test ROC AUC | 0.917 |
+| Selected threshold | 0.90 |
+| Reported precision | 0.928 |
+| Reported recall | 0.928 |
+| Pending claims held | 41 of 500 |
 
-The results looked good initially, especially the ROC AUC of 0.917. However, after reviewing the code, I found some issues that make these results unreliable.
+These numbers look promising, but I would not rely on them for deployment because of the problems described below.
 
-## 2. Understanding the Original Code
+### How the Script Works
 
-### Data Generation
+1. **`load_claims()`** creates sample historical and pending claims. Missing authorization, late filing, and patient risk influence the generated denial outcomes.
 
-The `load_claims()` function creates 10,000 historical claims and 500 pending claims.
+2. **`add_features()`** creates a late-filing flag, scales the billed amount, and calculates each patient's denial rate. It fills missing features with zero.
 
-The dataset includes patient details, service types, authorization status, billed amounts, submission delays, and claim outcomes.
+3. **`balance()`** duplicates denied claims to match the number of paid claims.
 
-The denial probability mainly depends on missing authorization, late filing, and patient risk.
+4. The script splits the data 80/20 and trains a Logistic Regression model.
 
-### Feature Engineering
+5. It calculates test metrics, searches for a threshold, and predicts which pending claims to hold.
 
-The `add_features()` function creates three features:
+---
 
-- `late_filing` – Checks whether a claim was submitted after 90 days.
-- `billed_amount_k` – Converts the billed amount into thousands.
-- `patient_denial_rate` – Calculates the average denial rate for each patient.
-
-Missing values are replaced with zero.
-
-### Data Balancing
-
-The `balance()` function duplicates denied claims to make the number of denied and paid claims equal.
-
-### Model Training
-
-The code divides the data into 80% training and 20% testing.
-
-It uses Logistic Regression to predict claim denials based on six features.
-
-### Model Evaluation
-
-The model calculates ROC AUC, precision, and recall. It also tries different thresholds to select the one with the best F1 score.
-
-### Pending Claim Predictions
-
-Finally, the model predicts which pending claims should be held for review.
-
-The original model holds 41 out of 500 claims.
-
-## 3. Issues Found in the Code
-
-I grouped the issues based on their impact on the model.
+## 2. Main Problems I Found
 
 ### Critical Issues
 
-#### 1. Data Leakage from `days_to_payment`
+#### 1. Payment Information Leaks the Outcome
 
-The model uses `days_to_payment` as a feature.
+The model uses `days_to_payment` as an input feature.
 
-But this information is only available after the insurance company processes the claim.
+This information is only available after the insurance company processes the claim. In the sample data, it is also generated based on whether the claim was denied.
 
-Since the model is supposed to predict denials before submission, this feature should not be used.
+Since the model needs to predict denials before submission, this feature should not be used.
 
-It also contains information related to the actual denial outcome, which can make the model perform better during testing than it would in real life.
+**Fix:** Remove `days_to_payment` from the model features.
 
-**Fix:** Remove `days_to_payment` from the input features.
+#### 2. Patient Denial History Uses Future Information
 
-#### 2. Data Leakage from `patient_denial_rate`
+The `patient_denial_rate` feature is calculated using all claims before splitting the data.
 
-The code calculates each patient's denial rate using the entire dataset before splitting it into training and testing data.
+This means it can include the current claim's result and future claim outcomes.
 
-This means the calculation can include the current claim's result and future claim outcomes.
+As a result, the model gets information that would not be available when making a prediction.
 
-The model is indirectly getting information it should not know.
+**Fix:** Calculate patient denial history using only claims already resolved at prediction time, or remove the feature.
 
-**Fix:** Calculate denial history using only previously resolved claims, or remove the feature until historical data can be handled correctly.
+#### 3. Balancing Happens Before Splitting
 
-#### 3. Balancing Before Splitting the Data
-
-The code duplicates denied claims before creating the training and testing sets.
+The code duplicates denied claims before dividing the dataset into training and testing sets.
 
 Because of this, the same claim can appear in both sets.
 
-This can make the evaluation results look better than they actually are.
+The test set also no longer reflects the actual denial rate of around 11.5%.
 
-The test dataset also has an artificial denial rate of around 50%, while the original denial rate is only 11.5%.
+This makes the evaluation results unreliable.
 
-**Fix:** Split the original dataset first. If balancing is needed, apply it only to the training data.
+**Fix:** Split the original claims first. If balancing is needed, apply it only to the training data.
 
-#### 4. Daily Review Limit Is Not Followed
+#### 4. Daily Review Limit Is Not Enforced
 
-The billing team can review only 150 claims per day.
+The billing team can review a maximum of 150 claims per day.
 
 However, the original code does not enforce this limit.
 
-If the model holds more than 150 claims on a particular day, the billing team may not be able to review all of them.
+If the model selects more than 150 claims on a particular day, the billing team may not be able to review all of them.
 
-**Fix:** Rank claims based on their predicted denial probability and select a maximum of 150 claims per processing day.
+**Fix:** Rank claims by predicted risk for each processing day and hold no more than 150.
 
-### High-Priority Issues
+### Other Important Issues
 
-#### 5. Incorrect Data Sorting
+#### 5. The Date Sorting Does Not Work
 
 The original code uses:
 
@@ -125,21 +98,19 @@ The original code uses:
 data.sort_values("service_date")
 ```
 
-But it does not save the sorted result.
+However, the sorted result is not assigned back to `data`.
 
-So the model is not actually testing on the newest 20% of claims, even though the output says so.
+So the test set is not actually the newest 20% of claims, even though the output says so.
 
-**Fix:**
+**Fix:** Save the sorted result and use chronological training, validation, and testing sets.
 
 ```python
 data = data.sort_values("service_date")
 ```
 
-Then divide the data into training, validation, and testing sets based on dates.
+#### 6. Recall Is Calculated Incorrectly
 
-#### 6. Incorrect Recall Calculation
-
-The original code calculates recall as:
+The original code calculates recall using:
 
 ```python
 recall = tp / max(tp + fp, 1)
@@ -147,85 +118,143 @@ recall = tp / max(tp + fp, 1)
 
 This is actually the formula for precision.
 
-The correct formula is:
+The correct recall formula is:
 
 ```python
 recall = tp / max(tp + fn, 1)
 ```
 
-Because of this mistake, the original model reports the same value for precision and recall.
+Because of this mistake, the original code reports the same value for precision and recall.
 
 **Fix:** Use Scikit-learn's built-in precision, recall, and F1 score functions.
 
-#### 7. Threshold Is Not Used Correctly
+#### 7. The Selected Threshold Is Not Used
 
-The model selects 0.90 as the best threshold during evaluation.
+The model selects a threshold of 0.90 during evaluation.
 
-But when predicting pending claims, it uses `model.predict()`, which applies the default threshold of 0.5.
+However, when predicting pending claims, it uses `model.predict()`, which applies the default threshold of 0.5.
 
-Also, the threshold is selected using the test data itself, which makes the final evaluation less reliable.
+The threshold is also selected using the test data, making the reported evaluation less reliable.
 
-**Fix:** Select the threshold using validation data and apply the chosen decision rule to the predicted probabilities.
+**Fix:** Choose the decision rule using validation data and apply it to predicted probabilities.
 
-#### 8. Submission Delay May Not Be Available
+#### 8. Some Inputs May Not Be Available Before Submission
 
 The model uses `days_to_submit` to identify late filing.
 
-However, pending claims have not been submitted yet, so the actual submission delay may not be known.
+However, pending claims have not been submitted yet, so their actual submission delay may not be known.
 
-**Fix:** Calculate the number of days from the service date to the current processing date, or use a confirmed planned submission date.
+**Fix:** Calculate filing age using the date the claim is being reviewed, or use a confirmed planned submission date.
 
-### Other Issues
+#### 9. Missing Values Need Better Handling
 
-#### 9. Missing Values
+The original code replaces all missing feature values with zero.
 
-The code replaces all missing feature values with zero.
+But missing information does not always mean zero.
 
-But missing information does not always mean zero, so this can affect predictions.
+This can affect the model's predictions.
 
-**Fix:** Handle missing values based on the meaning of each feature and use training data to determine appropriate replacements.
+**Fix:** Handle missing values based on what each feature represents.
 
-#### 10. Limited Model Evaluation
+#### 10. Model Evaluation Needs Improvement
 
-The original model mainly checks ROC AUC, precision, and recall.
+The original model mainly reports ROC AUC, precision, and recall.
 
-For this business problem, I would also evaluate:
+For this business problem, I would also check:
 
-- Precision and recall within the 150-claim review limit
-- How many actual denials are identified
-- Whether predicted probabilities are reliable
-- Cost of manual review compared with potential savings
+- How many actual denials are identified within the 150-claim review limit.
+- How many held claims are actually denied.
+- Whether the predicted probabilities are reliable.
+- Whether reviewing claims saves more money than it costs.
 
-#### 11. Synthetic Dataset
+The dataset is also synthetic, so real historical claims would be needed before deployment.
 
-The dataset is generated using Python and does not represent all the factors involved in real medical billing.
+---
 
-Before deployment, the model should be tested using real historical claims.
+## 3. Corrected Code and Results
 
-## 4. Changes Made in the Corrected Model
+I created `claim_denial_model_fixed.py` as a demonstration to address the main issues.
 
-I created `claim_denial_model_fixed.py` to address the main issues.
+### Changes Made
 
-The changes include:
-
-1. Removed `days_to_payment` and `patient_denial_rate` to avoid data leakage.
+1. Removed `days_to_payment` and `patient_denial_rate` to prevent the main data leakage issues.
 2. Used chronological training, validation, and testing splits.
-3. Kept the original denial distribution instead of balancing the entire dataset.
-4. Corrected the precision and recall calculations.
-5. Used predicted probabilities for identifying high-risk claims.
-6. Added a daily review limit of 150 claims.
+3. Divided the historical data into 60% training, 20% validation, and 20% testing.
+4. Kept the original denial distribution instead of balancing the entire dataset.
+5. Corrected the precision and recall calculations.
+6. Used predicted probabilities to identify high-risk claims.
+7. Added a daily review limit of 150 claims.
 
-The corrected version is only a demonstration using synthetic data.
+### Corrected Model Results
 
-It still assumes that `days_to_submit` is known when scoring claims. In a real system, this should be replaced with the actual filing age at the time of prediction.
+I ran the corrected script using the original synthetic data generator.
 
-Also, the dataset does not contain a separate processing date for pending claims, so the corrected example uses `service_date` to demonstrate daily grouping.
+The model selected a threshold of **0.23** using the validation set.
 
-## 5. How to Run the Project
+| Measure | Validation | Untouched Test |
+|---|---|---|
+| Claims | 2,000 | 2,000 |
+| Denial rate | 11.4% | 12.0% |
+| ROC AUC | 0.570 | 0.602 |
+| Average Precision (AP) | 0.197 | 0.255 |
+| Precision | 0.325 | 0.450 |
+| Recall | 0.220 | 0.224 |
+| Brier score | 0.098 | 0.100 |
+
+### Original vs. Corrected Model
+
+| Measure | Original Model | Corrected Model |
+|---|---|---|
+| ROC AUC | 0.917 | 0.602 |
+| Precision | 0.928 | 0.450 |
+| Recall | 0.928 (incorrect formula) | 0.224 |
+| Selected threshold | 0.90 | 0.23 |
+| Pending claims held | 41 | 27 |
+
+The corrected scores are lower because the model no longer uses the main leaked information, and the test data is no longer mixed with duplicated training examples.
+
+This gives a more useful evaluation of the model.
+
+However, the corrected model still needs further testing before it can be used in production.
+
+### Pending Claims Held by Day
+
+The corrected script ranks pending claims by predicted risk and applies the daily review limit.
+
+| Date Used for Demonstration | Pending Claims | Held for Review |
+|---|---|---|
+| 2025-07-01 | 111 | 5 |
+| 2025-07-02 | 84 | 3 |
+| 2025-07-03 | 98 | 6 |
+| 2025-07-04 | 101 | 8 |
+| 2025-07-05 | 106 | 5 |
+| **Total** | **500** | **27** |
+
+No group exceeds the daily limit of 150 claims.
+
+The script also saves `pending_claim_decisions.csv`, which contains claim IDs, predicted probabilities, and hold decisions.
+
+### Limitations of the Corrected Version
+
+The corrected code is a demonstration using synthetic data, not a production-ready model.
+
+It still uses `days_to_submit` as if it were known when making predictions.
+
+In a real system, filing age should be calculated using the actual date when the claim is being reviewed.
+
+Also, the sample dataset does not contain a separate processing date for pending claims.
+
+Because of this, the corrected code uses `service_date` to demonstrate daily grouping.
+
+These assumptions would need to be changed before real deployment.
+
+---
+
+## 4. How to Run the Project
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.10 or newer
 - NumPy
 - Pandas
 - Scikit-learn
@@ -248,30 +277,47 @@ python claim_denial_model.py
 python claim_denial_model_fixed.py
 ```
 
-Both Python files should be in the same folder because the corrected script uses the original data generator.
+Both Python files should be in the same folder because the corrected script imports `load_claims()` from the original script.
 
-## 6. Is the Model Ready for Production?
+### Project Files
 
-**My decision: No, the current model is not ready for production.**
+```text
+claim-denial-risk-model-review/
+│
+├── README.md
+├── claim_denial_model.py
+├── claim_denial_model_fixed.py
+└── pending_claim_decisions.csv
+```
 
-Even though the original model reports a ROC AUC of 0.917, the results are affected by data leakage and problems in the evaluation process.
+---
 
-The model also does not properly follow the daily review capacity.
+## 5. My Recommendation
 
-Before deploying it, I would recommend:
+**I would not recommend deploying the original model in the next sprint.**
 
-- Removing data leakage
-- Testing on properly separated historical data
-- Using correct evaluation metrics
-- Following the daily review limit
-- Testing the model with real insurance claims
-- Monitoring predictions and actual denial outcomes
+Even though it reports a high ROC AUC of 0.917, the results are affected by data leakage and testing mistakes.
 
-I would also suggest running the model alongside the existing billing process before allowing it to make automatic hold decisions.
+The original model also does not properly enforce the billing team's daily review limit.
 
-## 7. Conclusion
+Before deployment, I would recommend:
 
-After reviewing the code, I understood that a high ROC AUC score does not always mean a model is reliable.
+1. Testing the model using real historical claims.
+2. Making sure every feature is available at the time of prediction.
+3. Using properly separated training, validation, and testing data.
+4. Comparing the model against simple authorization and late-filing rules.
+5. Measuring how many denials can be identified within 150 reviews per day.
+6. Checking whether the model actually helps reduce billing delays and manual work.
+
+I would also suggest running the model alongside the existing billing process before allowing it to hold claims automatically.
+
+This would help us understand how it performs on real pending claims without affecting the normal workflow.
+
+---
+
+## 6. Conclusion
+
+After reviewing the code, I understood that a high ROC AUC score does not always mean a machine learning model is reliable.
 
 The way data is prepared, the features used for training, and the evaluation process are equally important.
 
@@ -283,3 +329,6 @@ The corrected version addresses the main problems and provides a better starting
 
 ---
 
+**Author:** Dhakshitha Nerella
+
+**Assessment:** AI/ML Engineer – Technical Assessment
